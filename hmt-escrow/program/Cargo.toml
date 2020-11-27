@@ -1,0 +1,23 @@
+[package]
+name = "hmt-escrow"
+version = "0.1.0"
+description = "Human Protocol Escrow Contract"
+authors = ["Solana Maintainers <maintainers@solana.foundation>"]
+repository = "https://github.com/solana-labs/solana-program-library"
+license = "Apache-2.0"
+edition = "2018"
+
+[features]
+no-entrypoint = []
+
+[dependencies]
+arrayref = "0.3.6"
+num_enum = "0.5.1"
+num-derive = "0.3"
+num-traits = "0.2"
+solana-program = "1.4.9"
+thiserror = "1.0"
+spl-token = { version = "3.0", path = "../../token/program", features = [ "no-entrypoint" ] }
+
+[lib]
+crate-type = ["cdylib", "lib"]
