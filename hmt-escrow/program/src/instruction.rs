@@ -1,7 +1,7 @@
 //! Instruction types
 #![allow(clippy::too_many_arguments)]
 
-use crate::state::{DataHash, DataUrl};
+use crate::state::{DataHash, DataUrl, URL_LEN};
 use solana_program::{
     instruction::{AccountMeta, Instruction},
     program_error::ProgramError,
@@ -263,14 +263,12 @@ impl EscrowInstruction {
     }
 
     fn unpack_url(input: &[u8]) -> Result<(DataUrl, &[u8]), ProgramError> {
-        if input.len() >= 2048 {
-            let (bytes, rest) = input.split_at(2048);
+        if input.len() >= URL_LEN {
+            let (bytes, rest) = input.split_at(URL_LEN);
+            let mut bytes_copy = [0u8; URL_LEN];
+            bytes_copy.copy_from_slice(bytes);
             Ok((
-                DataUrl::new_from_array(
-                    bytes
-                        .try_into()
-                        .or(Err(ProgramError::InvalidInstructionData))?,
-                ),
+                DataUrl::new_from_array(bytes_copy),
                 rest,
             ))
         } else {
@@ -480,12 +478,12 @@ mod test {
         let check = EscrowInstruction::Setup {
             reputation_oracle_stake: 5,
             recording_oracle_stake: 10,
-            manifest_url: DataUrl::new_from_array([10; 2048]),
+            manifest_url: DataUrl::new_from_array([10; URL_LEN]),
             manifest_hash: DataHash::new_from_array([11; 20]),
         };
         let packed = check.pack();
         let mut expect: Vec<u8> = vec![2, 5, 10];
-        expect.extend(&[10; 2048]);
+        expect.extend(&[10; URL_LEN]);
         expect.extend(&[11; 20]);
         assert_eq!(packed, expect);
         let unpacked = EscrowInstruction::unpack(&expect).unwrap();
@@ -494,14 +492,14 @@ mod test {
         let check = EscrowInstruction::StoreResults {
             total_amount: 1000000,  // 0x00000000000F4240
             total_recipients: 1000, // 0x00000000000003E8
-            final_results_url: DataUrl::new_from_array([21; 2048]),
+            final_results_url: DataUrl::new_from_array([21; URL_LEN]),
             final_results_hash: DataHash::new_from_array([22; 20]),
         };
         let packed = check.pack();
         let mut expect: Vec<u8> = vec![3];
         expect.extend(&[0x40, 0x42, 0x0F, 0x00, 0x00, 0x00, 0x00, 0x00]);
         expect.extend(&[0xE8, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
-        expect.extend(&[21; 2048]);
+        expect.extend(&[21; URL_LEN]);
         expect.extend(&[22; 20]);
         assert_eq!(packed, expect);
         let unpacked = EscrowInstruction::unpack(&expect).unwrap();

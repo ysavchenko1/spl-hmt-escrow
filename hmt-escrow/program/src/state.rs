@@ -9,7 +9,10 @@ use solana_program::{
     program_pack::{IsInitialized, Pack, Sealed},
     pubkey::Pubkey,
 };
-use std::{mem, str::FromStr};
+use std::{mem, str::FromStr, fmt};
+
+/// Size for the URL field
+pub const URL_LEN: usize = 256;
 
 /// Escrow state.
 #[repr(u8)]
@@ -57,12 +60,24 @@ impl DataHash {
 
 /// Stores data URL
 #[repr(transparent)]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DataUrl([u8; 2048]);
+#[derive(Clone, Copy)]
+pub struct DataUrl([u8; URL_LEN]);
 
 impl Default for DataUrl {
     fn default() -> Self {
-        DataUrl([0; 2048])
+        DataUrl([0; URL_LEN])
+    }
+}
+
+impl fmt::Debug for DataUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { 
+        self.0[..].fmt(f)
+    }
+}
+
+impl PartialEq for DataUrl {
+    fn eq(&self, other: &Self) -> bool { 
+        self.0.iter().zip(other.0.iter()).all(|(a,b)| a == b)
     }
 }
 
@@ -88,7 +103,7 @@ impl FromStr for DataUrl {
 
 impl DataUrl {
     /// Create new from fixed size array
-    pub const fn new_from_array(data: [u8; 2048]) -> Self {
+    pub const fn new_from_array(data: [u8; URL_LEN]) -> Self {
         Self(data)
     }
 }
@@ -151,7 +166,7 @@ impl IsInitialized for Escrow {
 }
 
 impl Pack for Escrow {
-    const LEN: usize = 4484;
+    const LEN: usize = 388 + URL_LEN + URL_LEN;
 
     /// Packs a [EscrowInfo](struct.EscrowInfo.html) into a byte buffer.
     fn pack_into_slice(&self, output: &mut [u8]) {
@@ -180,7 +195,7 @@ impl Pack for Escrow {
             final_results_url_dst,
             final_results_hash_dst,
         ) = mut_array_refs![
-            output, 8, 1, 32, 32, 36, 36, 1, 36, 36, 1, 32, 32, 32, 8, 8, 8, 8, 1, 2048, 20, 2048,
+            output, 8, 1, 32, 32, 36, 36, 1, 36, 36, 1, 32, 32, 32, 8, 8, 8, 8, 1, URL_LEN, 20, URL_LEN,
             20
         ];
         expires_dst.copy_from_slice(&self.expires.to_le_bytes());
@@ -241,7 +256,7 @@ impl Pack for Escrow {
             final_results_url_src,
             final_results_hash_src,
         ) = array_refs![
-            input, 8, 1, 32, 32, 36, 36, 1, 36, 36, 1, 32, 32, 32, 8, 8, 8, 8, 1, 2048, 20, 2048,
+            input, 8, 1, 32, 32, 36, 36, 1, 36, 36, 1, 32, 32, 32, 8, 8, 8, 8, 1, URL_LEN, 20, URL_LEN,
             20
         ];
         Ok(Escrow {
@@ -329,9 +344,9 @@ mod test {
             total_recipients: 1000000,
             sent_amount: 2000000,
             sent_recipients: 100000,
-            manifest_url: DataUrl::new_from_array([10; 2048]),
+            manifest_url: DataUrl::new_from_array([10; URL_LEN]),
             manifest_hash: DataHash::new_from_array([11; 20]),
-            final_results_url: DataUrl::new_from_array([12; 2048]),
+            final_results_url: DataUrl::new_from_array([12; URL_LEN]),
             final_results_hash: DataHash::new_from_array([13; 20]),
         };
         let mut packed_obj: [u8; 4484] = [0; 4484];

@@ -9,6 +9,7 @@ members = [
   "feature-proposal/program",
   "feature-proposal/cli",
   "memo/program",
+  "hmt-escrow/cli",
   "hmt-escrow/program",
   "shared-memory/program",
   "stake-pool/cli",
