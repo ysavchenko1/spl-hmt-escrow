@@ -10,7 +10,7 @@ use solana_clap_utils::{
 use solana_client::{
     rpc_client::RpcClient,
 };
-use solana_program::{instruction::Instruction, program_pack::Pack, pubkey::Pubkey};
+use solana_program::{instruction::Instruction, program_pack::Pack, pubkey::Pubkey, program_option::COption};
 use solana_sdk::{
     commitment_config::CommitmentConfig,
     native_token::*,
@@ -29,6 +29,9 @@ use spl_token::{
     state::Account as TokenAccount,
 };
 use std::process::exit;
+use std::str;
+use chrono::prelude::*;
+use hex;
 
 struct Config {
     rpc_client: RpcClient,
@@ -63,7 +66,7 @@ fn check_fee_payer_balance(config: &Config, required_balance: u64) -> Result<(),
     }
 }
 
-fn command_create_escrow(config: &Config, mint: &Pubkey, launcher: &Option<Pubkey>, canceler: &Option<Pubkey>, canceler_token: &Option<Pubkey>, duration: u64) -> CommandResult {
+fn command_create(config: &Config, mint: &Pubkey, launcher: &Option<Pubkey>, canceler: &Option<Pubkey>, canceler_token: &Option<Pubkey>, duration: u64) -> CommandResult {
     
     let escrow_token_account = Keypair::new();
     println!(
@@ -191,6 +194,56 @@ fn command_create_escrow(config: &Config, mint: &Pubkey, launcher: &Option<Pubke
     Ok(Some(transaction))
 }
 
+fn format_coption_key<'a>(optional: &'a COption<Pubkey>) -> Box<dyn std::fmt::Display + 'a> {
+    match optional {
+        COption::Some(key) => Box::new(key),
+        COption::None => Box::new("None")
+    }
+}
+
+fn command_info(config: &Config, escrow: &Pubkey) -> CommandResult {
+
+    let account_data = config.rpc_client.get_account_data(escrow)?;
+    let escrow: Escrow =
+        Escrow::unpack_from_slice(account_data.as_slice()).unwrap();
+
+    println!("Escrow information");
+    println!("==================");
+    println!("State: {:?}", escrow.state);
+    println!("Expires: {}", NaiveDateTime::from_timestamp(escrow.expires, 0).format("%Y-%m-%d %H:%M:%S").to_string());
+    println!("Token mint: {}", escrow.token_mint);
+    println!("Token account: {}", escrow.token_account);
+    println!("Launcher: {}", escrow.launcher);
+    println!("Canceler: {}", escrow.canceler);
+    println!("Canceler token account: {}", escrow.canceler_token_account);
+    println!("");
+    println!("Reputation oracle");
+    println!("=================");
+    println!("Account: {}", format_coption_key(&escrow.reputation_oracle));
+    println!("Token account: {}", format_coption_key(&escrow.reputation_oracle_token_account));
+    println!("Fee: {}%", escrow.reputation_oracle_stake);
+    println!("");
+    println!("Recording oracle");
+    println!("================");
+    println!("Account: {}", format_coption_key(&escrow.recording_oracle));
+    println!("Token account: {}", format_coption_key(&escrow.recording_oracle_token_account));
+    println!("Fee: {}%", escrow.recording_oracle_stake);
+    println!("");
+    println!("Data");
+    println!("====");
+    println!("Job manifest URL: {}", str::from_utf8(escrow.manifest_url.as_ref()).unwrap_or(""));
+    println!("Job manifest hash: {}", hex::encode(escrow.manifest_hash.as_ref()));
+    println!("Final results URL: {}", str::from_utf8(escrow.final_results_url.as_ref()).unwrap_or(""));
+    println!("Final results hash: {}", hex::encode(escrow.final_results_hash.as_ref()));
+    println!("");
+    println!("Amounts and recipients");
+    println!("======================");
+    println!("Amount: {} SOL ({} SOL sent)", lamports_to_sol(escrow.total_amount), lamports_to_sol(escrow.sent_amount));
+    println!("Recipients: {} ({} sent)", lamports_to_sol(escrow.total_recipients), lamports_to_sol(escrow.sent_recipients));
+
+    Ok(None)
+}
+
 fn main() {
     let matches = App::new(crate_name!())
         .about(crate_description!())
@@ -295,6 +348,17 @@ fn main() {
                     .help("Escrow duration in seconds, once this time passes escrow contract is no longer operational"),
             )
         )
+        .subcommand(SubCommand::with_name("info").about("Shows information about the escrow account")
+            .arg(
+                Arg::with_name("escrow")
+                    .validator(is_pubkey)
+                    .index(1)
+                    .value_name("ESCROW_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Escrow address"),
+            )
+        )
         .get_matches();
 
     let mut wallet_manager = None;
@@ -347,13 +411,20 @@ fn main() {
             let canceler: Option<Pubkey> = pubkey_of(arg_matches, "canceler");
             let canceler_token: Option<Pubkey> = pubkey_of(arg_matches, "canceler_token");
             let duration = value_t_or_exit!(arg_matches, "duration", u64);
-            command_create_escrow(
+            command_create(
                 &config,
                 &mint,
                 &launcher,
                 &canceler,
                 &canceler_token,
                 duration,
+            )
+        }
+        ("info", Some(arg_matches)) => {
+            let escrow: Pubkey = pubkey_of(arg_matches, "escrow").unwrap();
+            command_info(
+                &config,
+                &escrow,
             )
         }
         _ => unreachable!(),
