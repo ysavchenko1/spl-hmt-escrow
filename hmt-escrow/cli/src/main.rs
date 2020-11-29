@@ -1,18 +1,18 @@
-use hmt_escrow::state::DataHash;
-use hmt_escrow::state::DataUrl;
 use chrono::prelude::*;
 use clap::{
     crate_description, crate_name, crate_version, value_t, value_t_or_exit, App, AppSettings, Arg,
     SubCommand,
 };
-use hex;
+use hmt_escrow::state::DataHash;
+use hmt_escrow::state::DataUrl;
 use hmt_escrow::{
-    self, instruction::initialize as initialize_escrow, processor::Processor as EscrowProcessor,
-    state::Escrow, instruction::setup as setup_escrow, instruction::store_results,
+    self, instruction::initialize as initialize_escrow, instruction::payout,
+    instruction::setup as setup_escrow, instruction::store_results,
+    processor::Processor as EscrowProcessor, state::Escrow,
 };
 use solana_clap_utils::{
     input_parsers::{pubkey_of, value_of},
-    input_validators::{is_keypair, is_parsable, is_pubkey, is_amount, is_url},
+    input_validators::{is_amount, is_keypair, is_parsable, is_pubkey, is_url},
     keypair::signer_from_path,
 };
 use solana_client::rpc_client::RpcClient;
@@ -26,7 +26,11 @@ use solana_sdk::{
     system_instruction,
     transaction::Transaction,
 };
-use spl_token::{self, instruction::initialize_account, state::Account as TokenAccount, state::Mint as TokenMint};
+use spl_token::{
+    self, instruction::initialize_account, state::Account as TokenAccount, state::Mint as TokenMint,
+};
+use std::fs::File;
+use std::io::BufReader;
 use std::{fmt::Display, process::exit, str, str::FromStr};
 
 struct Config {
@@ -205,8 +209,12 @@ fn command_info(config: &Config, escrow: &Pubkey) -> CommandResult {
     let escrow: Escrow = Escrow::unpack_from_slice(account_data.as_slice())?;
 
     // Check token mint to convert amount to float
-    let account_data = config.rpc_client.get_account_data(&escrow.token_mint).or(Err("Cannot read escrow mint data"))?;
-    let mint_info: TokenMint = TokenMint::unpack_from_slice(account_data.as_slice()).or(Err(format!("{} is not a valid mint address", escrow.token_mint)))?;
+    let account_data = config
+        .rpc_client
+        .get_account_data(&escrow.token_mint)
+        .or(Err("Cannot read escrow mint data"))?;
+    let mint_info: TokenMint = TokenMint::unpack_from_slice(account_data.as_slice())
+        .map_err(|_| format!("{} is not a valid mint address", escrow.token_mint))?;
 
     println!("Escrow information");
     println!("==================");
@@ -222,7 +230,7 @@ fn command_info(config: &Config, escrow: &Pubkey) -> CommandResult {
     println!("Launcher: {}", escrow.launcher);
     println!("Canceler: {}", escrow.canceler);
     println!("Canceler token account: {}", escrow.canceler_token_account);
-    println!("");
+    println!();
     println!("Reputation oracle");
     println!("=================");
     println!("Account: {}", format_coption_key(&escrow.reputation_oracle));
@@ -231,7 +239,7 @@ fn command_info(config: &Config, escrow: &Pubkey) -> CommandResult {
         format_coption_key(&escrow.reputation_oracle_token_account)
     );
     println!("Fee: {}%", escrow.reputation_oracle_stake);
-    println!("");
+    println!();
     println!("Recording oracle");
     println!("================");
     println!("Account: {}", format_coption_key(&escrow.recording_oracle));
@@ -240,7 +248,7 @@ fn command_info(config: &Config, escrow: &Pubkey) -> CommandResult {
         format_coption_key(&escrow.recording_oracle_token_account)
     );
     println!("Fee: {}%", escrow.recording_oracle_stake);
-    println!("");
+    println!();
     println!("Data");
     println!("====");
     println!(
@@ -259,7 +267,7 @@ fn command_info(config: &Config, escrow: &Pubkey) -> CommandResult {
         "Final results hash: {}",
         hex::encode(escrow.final_results_hash.as_ref())
     );
-    println!("");
+    println!();
     println!("Amounts and recipients");
     println!("======================");
     println!(
@@ -269,14 +277,14 @@ fn command_info(config: &Config, escrow: &Pubkey) -> CommandResult {
     );
     println!(
         "Recipients: {} ({} sent)",
-        escrow.total_recipients,
-        escrow.sent_recipients,
+        escrow.total_recipients, escrow.sent_recipients,
     );
 
     Ok(None)
 }
 
 /// Issues setup command
+#[allow(clippy::too_many_arguments)]
 fn command_setup(
     config: &Config,
     escrow: &Pubkey,
@@ -286,7 +294,7 @@ fn command_setup(
     recording_oracle: &Option<Pubkey>,
     recording_oracle_token: &Option<Pubkey>,
     recording_oracle_stake: u8,
-    manifest_url: &String,
+    manifest_url: &str,
     manifest_hash: &Option<String>,
 ) -> CommandResult {
     // Validate parameters
@@ -297,7 +305,7 @@ fn command_setup(
         return Err("Invalid stake values".into());
     }
 
-    let manifest_url: DataUrl = DataUrl::from_str(manifest_url.as_ref()).or(Err("URL too long"))?;
+    let manifest_url: DataUrl = DataUrl::from_str(manifest_url).or(Err("URL too long"))?;
     let manifest_hash: DataHash = match manifest_hash {
         None => Default::default(),
         Some(value) => {
@@ -312,10 +320,7 @@ fn command_setup(
         .get_minimum_balance_for_rent_exemption(TokenAccount::LEN)?;
     let mut total_rent_free_balances = 0;
 
-    let mut signers = vec![
-        config.fee_payer.as_ref(),
-        config.owner.as_ref(),
-    ];
+    let mut signers = vec![config.fee_payer.as_ref(), config.owner.as_ref()];
 
     // Read escrow state
     let account_data = config.rpc_client.get_account_data(escrow)?;
@@ -429,11 +434,11 @@ fn command_store_results(
     escrow: &Pubkey,
     amount: f64,
     recipients: u64,
-    results_url: &String,
+    results_url: &str,
     results_hash: &Option<String>,
 ) -> CommandResult {
     // Validate parameters
-    let results_url: DataUrl = DataUrl::from_str(results_url.as_ref()).or(Err("URL too long"))?;
+    let results_url: DataUrl = DataUrl::from_str(results_url).or(Err("URL too long"))?;
     let results_hash: DataHash = match results_hash {
         None => Default::default(),
         Some(value) => {
@@ -443,40 +448,176 @@ fn command_store_results(
     };
 
     // Read escrow state
-    let account_data = config.rpc_client.get_account_data(escrow).or(Err("Cannot read escrow data"))?;
-    let escrow_info: Escrow = Escrow::unpack_from_slice(account_data.as_slice()).or(Err(format!("{} is not a valid escrow address", escrow)))?;
+    let account_data = config
+        .rpc_client
+        .get_account_data(escrow)
+        .or(Err("Cannot read escrow data"))?;
+    let escrow_info: Escrow = Escrow::unpack_from_slice(account_data.as_slice())
+        .map_err(|_| format!("{} is not a valid escrow address", escrow))?;
 
     // Check token mint to convert amount to u64
-    let account_data = config.rpc_client.get_account_data(&escrow_info.token_mint).or(Err("Cannot read escrow mint data"))?;
-    let mint_info: TokenMint = TokenMint::unpack_from_slice(account_data.as_slice()).or(Err(format!("{} is not a valid mint address", escrow_info.token_mint)))?;
+    let account_data = config
+        .rpc_client
+        .get_account_data(&escrow_info.token_mint)
+        .or(Err("Cannot read escrow mint data"))?;
+    let mint_info: TokenMint = TokenMint::unpack_from_slice(account_data.as_slice())
+        .map_err(|_| format!("{} is not a valid mint address", escrow_info.token_mint))?;
 
     let amount = spl_token::ui_amount_to_amount(amount, mint_info.decimals);
 
-    let mut transaction = Transaction::new_with_payer(&[
-        // Store results instruction
-        store_results(
-            &hmt_escrow::id(),
-            &escrow,
-            &config.owner.pubkey(),
-            amount,
-            recipients,
-            &results_url,
-            &results_hash,
-        )?,
-    ], Some(&config.fee_payer.pubkey()));
+    let mut transaction = Transaction::new_with_payer(
+        &[
+            // Store results instruction
+            store_results(
+                &hmt_escrow::id(),
+                &escrow,
+                &config.owner.pubkey(),
+                amount,
+                recipients,
+                &results_url,
+                &results_hash,
+            )?,
+        ],
+        Some(&config.fee_payer.pubkey()),
+    );
 
     let (recent_blockhash, fee_calculator) = config.rpc_client.get_recent_blockhash()?;
-    check_fee_payer_balance(
-        config,
-        fee_calculator.calculate_fee(&transaction.message()),
-    )?;
-    let mut signers = vec![
-        config.fee_payer.as_ref(),
-        config.owner.as_ref(),
-    ];
+    check_fee_payer_balance(config, fee_calculator.calculate_fee(&transaction.message()))?;
+    let mut signers = vec![config.fee_payer.as_ref(), config.owner.as_ref()];
     unique_signers!(signers);
     transaction.sign(&signers, recent_blockhash);
     Ok(Some(transaction))
+}
+
+#[derive(Debug)]
+struct PayoutRecord {
+    recipient: Pubkey,
+    amount: f64,
+}
+
+/// Creates transaction for payout from the escrow account
+fn command_payout(config: &Config, escrow: &Pubkey, file_name: &str) -> CommandResult {
+    // Read CSV file and validate its contents
+    let file = File::open(file_name).map_err(|_| format!("Cannot find file {}", file_name))?;
+    let file_reader = BufReader::new(file);
+    let mut csv_reader = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .from_reader(file_reader);
+
+    let recipients: Vec<PayoutRecord> = csv_reader
+        .records()
+        .filter_map(|record| {
+            record.ok().and_then(|record| {
+                let recipient: Option<Pubkey> =
+                    Pubkey::from_str(record.get(0).unwrap_or_default()).ok();
+                let amount: Option<f64> = record.get(1).unwrap_or_default().parse::<f64>().ok();
+                match (recipient, amount) {
+                    (Some(recipient), Some(amount)) => Some(PayoutRecord { recipient, amount }),
+                    _ => None
+                }
+            })
+        })
+        .collect();
+    if recipients.is_empty() {
+        return Err("Cannot find anyone to sent tokens to".into());
+    }
+    let total_amount: f64 = recipients.iter().map(|x| x.amount).sum();
+
+    // Read escrow state
+    let account_data = config
+        .rpc_client
+        .get_account_data(escrow)
+        .or(Err("Cannot read escrow data"))?;
+    let escrow_info: Escrow = Escrow::unpack_from_slice(account_data.as_slice())
+        .map_err(|_| format!("{} is not a valid escrow address", escrow))?;
+
+    // Check oracle accounts
+    let reputation_oracle_token_account = escrow_info
+        .reputation_oracle_token_account
+        .ok_or::<Error>("Reputation oracle token account not defined".into())?;
+    let recording_oracle_token_account = escrow_info
+        .recording_oracle_token_account
+        .ok_or::<Error>("Recording oracle token account not defined".into())?;
+
+    // Check token mint to convert amount to u64
+    let account_data = config
+        .rpc_client
+        .get_account_data(&escrow_info.token_mint)
+        .or(Err("Cannot read escrow mint data"))?;
+    let mint_info: TokenMint = TokenMint::unpack_from_slice(account_data.as_slice())
+        .map_err(|_| format!("{} is not a valid mint address", escrow_info.token_mint))?;
+    let total_amount = spl_token::ui_amount_to_amount(total_amount, mint_info.decimals);
+
+    // Check escrow token account balance
+    let account_data = config
+        .rpc_client
+        .get_account_data(&escrow_info.token_account)
+        .or(Err("Cannot read escrow token account data"))?;
+    let token_account_info: TokenAccount = TokenAccount::unpack_from_slice(account_data.as_slice())
+        .map_err(|_| {
+            format!(
+                "{} is not a valid token account address",
+                escrow_info.token_account
+            )
+        })?;
+
+    if total_amount > token_account_info.amount {
+        return Err(format!(
+            "{} tokens needed on escrow account, only {} found",
+            spl_token::amount_to_ui_amount(total_amount, mint_info.decimals),
+            spl_token::amount_to_ui_amount(token_account_info.amount, mint_info.decimals)
+        )
+        .into());
+    }
+
+    let authority =
+        EscrowProcessor::authority_id(&hmt_escrow::id(), &escrow, escrow_info.bump_seed)?;
+    let mut instructions_ui_amount: f64 = 0.0;
+    let instructions: Vec<Instruction> = recipients
+        .iter()
+        .filter_map(|record| {
+            let instruction = payout(
+                &hmt_escrow::id(),
+                &escrow,
+                &config.owner.pubkey(),
+                &escrow_info.token_account,
+                &authority,
+                &record.recipient,
+                &reputation_oracle_token_account,
+                &recording_oracle_token_account,
+                &spl_token::id(),
+                spl_token::ui_amount_to_amount(record.amount, mint_info.decimals),
+            )
+            .ok();
+
+            if instruction != None {
+                println!("{}: {}", record.recipient, record.amount);
+                instructions_ui_amount += record.amount;
+            }
+
+            instruction
+        })
+        .collect();
+
+    if !instructions.is_empty() {
+        let total_fees = escrow_info.reputation_oracle_stake + escrow_info.recording_oracle_stake;
+        if total_fees != 0 {
+            println!("Sending {} to {} recipients", instructions_ui_amount, instructions.len());
+            println!("{}% ({}) will be used to pay oracle fees", total_fees, total_fees as f64 * instructions_ui_amount / 100.0);
+        }
+
+        let mut transaction =
+            Transaction::new_with_payer(&instructions, Some(&config.fee_payer.pubkey()));
+
+        let (recent_blockhash, fee_calculator) = config.rpc_client.get_recent_blockhash()?;
+        check_fee_payer_balance(config, fee_calculator.calculate_fee(&transaction.message()))?;
+        let mut signers = vec![config.fee_payer.as_ref(), config.owner.as_ref()];
+        unique_signers!(signers);
+        transaction.sign(&signers, recent_blockhash);
+        Ok(Some(transaction))
+    } else {
+        Err("No payouts created".into())
+    }
 }
 
 /// Return an error if a hex cannot be parsed.
@@ -727,6 +868,26 @@ fn main() {
                     .help("20-byte results SHA1 hash in hex format [default: 0-byte hash]"),
             )
         )
+        .subcommand(SubCommand::with_name("payout").about("Pays tokens from the escrow account")
+            .arg(
+                Arg::with_name("escrow")
+                    .validator(is_pubkey)
+                    .index(1)
+                    .value_name("ESCROW_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Escrow address"),
+            )
+            .arg(
+                Arg::with_name("file_name")
+                    .validator(is_parsable::<String>)
+                    .index(2)
+                    .value_name("FILE")
+                    .takes_value(true)
+                    .required(true)
+                    .help("CSV file with recipients and amounts, <address>,<amount> on each line"),
+            )
+        )
         .get_matches();
 
     let mut wallet_manager = None;
@@ -804,8 +965,7 @@ fn main() {
                 pubkey_of(arg_matches, "recording_oracle_token");
             let recording_oracle_stake =
                 value_t_or_exit!(arg_matches, "recording_oracle_stake", u8);
-            let manifest_url: String =
-                value_of(arg_matches, "manifest_url").unwrap_or(String::new());
+            let manifest_url: String = value_of(arg_matches, "manifest_url").unwrap_or_default();
             let manifest_hash: Option<String> = value_of(arg_matches, "manifest_hash");
             command_setup(
                 &config,
@@ -824,8 +984,7 @@ fn main() {
             let escrow: Pubkey = pubkey_of(arg_matches, "escrow").unwrap();
             let amount = value_t_or_exit!(arg_matches, "amount", f64);
             let recipients = value_t_or_exit!(arg_matches, "recipients", u64);
-            let results_url: String =
-                value_of(arg_matches, "results_url").unwrap_or(String::new());
+            let results_url: String = value_of(arg_matches, "results_url").unwrap_or_default();
             let results_hash: Option<String> = value_of(arg_matches, "results_hash");
             command_store_results(
                 &config,
@@ -835,6 +994,11 @@ fn main() {
                 &results_url,
                 &results_hash,
             )
+        }
+        ("payout", Some(arg_matches)) => {
+            let escrow: Pubkey = pubkey_of(arg_matches, "escrow").unwrap();
+            let file_name = value_t_or_exit!(arg_matches, "file_name", String);
+            command_payout(&config, &escrow, &file_name)
         }
         _ => unreachable!(),
     }

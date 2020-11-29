@@ -9,7 +9,7 @@ version = "2.0.1"
 
 [dependencies]
 clap = "2.33.3"
-serde_json = "1.0.57"
+serde = "1.0.117"
 solana-account-decoder = "1.4.9"
 solana-clap-utils = "1.4.9"
 solana-cli-config = "1.4.9"
@@ -19,6 +19,7 @@ solana-sdk = "1.4.9"
 solana-program = "1.4.9"
 chrono = "0.4.19"
 hex = "0.4.2"
+csv = "1.1.5"
 hmt-escrow = { path="../program", features = [ "no-entrypoint" ] }
 spl-token = { path="../../token/program", features = [ "no-entrypoint" ]  }
 

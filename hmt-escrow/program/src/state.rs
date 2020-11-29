@@ -182,6 +182,7 @@ impl Pack for Escrow {
     /// Packs a [EscrowInfo](struct.EscrowInfo.html) into a byte buffer.
     fn pack_into_slice(&self, output: &mut [u8]) {
         let output = array_mut_ref![output, 0, Escrow::LEN];
+        #[allow(clippy::ptr_offset_with_cast)]
         let (
             expires_dst,
             bump_seed_dst,
