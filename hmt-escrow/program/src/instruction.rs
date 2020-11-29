@@ -8,7 +8,7 @@ use solana_program::{
     pubkey::Pubkey,
     sysvar,
 };
-use std::{convert::TryInto, mem::size_of, str::FromStr};
+use std::{convert::TryInto, mem::size_of};
 /// Instructions supported by the escrow program
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq)]
@@ -350,13 +350,13 @@ pub fn store_results(
     trusted_handler: &Pubkey,
     total_amount: u64,
     total_recipients: u64,
-    final_results_url_str: &str,
+    final_results_url: &DataUrl,
     final_results_hash: &DataHash,
 ) -> Result<Instruction, ProgramError> {
     let data = EscrowInstruction::StoreResults {
         total_amount,
         total_recipients,
-        final_results_url: DataUrl::from_str(final_results_url_str)?,
+        final_results_url: *final_results_url,
         final_results_hash: *final_results_hash,
     }
     .pack();

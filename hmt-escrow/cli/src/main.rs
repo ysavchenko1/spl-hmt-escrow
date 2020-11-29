@@ -8,11 +8,11 @@ use clap::{
 use hex;
 use hmt_escrow::{
     self, instruction::initialize as initialize_escrow, processor::Processor as EscrowProcessor,
-    state::Escrow, instruction::setup as setup_escrow
+    state::Escrow, instruction::setup as setup_escrow, instruction::store_results,
 };
 use solana_clap_utils::{
     input_parsers::{pubkey_of, value_of},
-    input_validators::{is_keypair, is_parsable, is_pubkey, is_url},
+    input_validators::{is_keypair, is_parsable, is_pubkey, is_amount, is_url},
     keypair::signer_from_path,
 };
 use solana_client::rpc_client::RpcClient;
@@ -26,7 +26,7 @@ use solana_sdk::{
     system_instruction,
     transaction::Transaction,
 };
-use spl_token::{self, instruction::initialize_account, state::Account as TokenAccount};
+use spl_token::{self, instruction::initialize_account, state::Account as TokenAccount, state::Mint as TokenMint};
 use std::{fmt::Display, process::exit, str, str::FromStr};
 
 struct Config {
@@ -204,6 +204,10 @@ fn command_info(config: &Config, escrow: &Pubkey) -> CommandResult {
     let account_data = config.rpc_client.get_account_data(escrow)?;
     let escrow: Escrow = Escrow::unpack_from_slice(account_data.as_slice())?;
 
+    // Check token mint to convert amount to float
+    let account_data = config.rpc_client.get_account_data(&escrow.token_mint).or(Err("Cannot read escrow mint data"))?;
+    let mint_info: TokenMint = TokenMint::unpack_from_slice(account_data.as_slice()).or(Err(format!("{} is not a valid mint address", escrow.token_mint)))?;
+
     println!("Escrow information");
     println!("==================");
     println!("State: {:?}", escrow.state);
@@ -259,14 +263,14 @@ fn command_info(config: &Config, escrow: &Pubkey) -> CommandResult {
     println!("Amounts and recipients");
     println!("======================");
     println!(
-        "Amount: {} SOL ({} SOL sent)",
-        lamports_to_sol(escrow.total_amount),
-        lamports_to_sol(escrow.sent_amount)
+        "Amount: {} ({} sent)",
+        spl_token::amount_to_ui_amount(escrow.total_amount, mint_info.decimals),
+        spl_token::amount_to_ui_amount(escrow.sent_amount, mint_info.decimals),
     );
     println!(
         "Recipients: {} ({} sent)",
-        lamports_to_sol(escrow.total_recipients),
-        lamports_to_sol(escrow.sent_recipients)
+        escrow.total_recipients,
+        escrow.sent_recipients,
     );
 
     Ok(None)
@@ -414,6 +418,62 @@ fn command_setup(
         config,
         total_rent_free_balances + fee_calculator.calculate_fee(&transaction.message()),
     )?;
+    unique_signers!(signers);
+    transaction.sign(&signers, recent_blockhash);
+    Ok(Some(transaction))
+}
+
+/// Issues store results command
+fn command_store_results(
+    config: &Config,
+    escrow: &Pubkey,
+    amount: f64,
+    recipients: u64,
+    results_url: &String,
+    results_hash: &Option<String>,
+) -> CommandResult {
+    // Validate parameters
+    let results_url: DataUrl = DataUrl::from_str(results_url.as_ref()).or(Err("URL too long"))?;
+    let results_hash: DataHash = match results_hash {
+        None => Default::default(),
+        Some(value) => {
+            let bytes = hex::decode(value).or(Err("Hash decoding error"))?;
+            DataHash::new_from_slice(&bytes).or(Err("Wrong hash size"))?
+        }
+    };
+
+    // Read escrow state
+    let account_data = config.rpc_client.get_account_data(escrow).or(Err("Cannot read escrow data"))?;
+    let escrow_info: Escrow = Escrow::unpack_from_slice(account_data.as_slice()).or(Err(format!("{} is not a valid escrow address", escrow)))?;
+
+    // Check token mint to convert amount to u64
+    let account_data = config.rpc_client.get_account_data(&escrow_info.token_mint).or(Err("Cannot read escrow mint data"))?;
+    let mint_info: TokenMint = TokenMint::unpack_from_slice(account_data.as_slice()).or(Err(format!("{} is not a valid mint address", escrow_info.token_mint)))?;
+
+    let amount = spl_token::ui_amount_to_amount(amount, mint_info.decimals);
+
+    let mut transaction = Transaction::new_with_payer(&[
+        // Store results instruction
+        store_results(
+            &hmt_escrow::id(),
+            &escrow,
+            &config.owner.pubkey(),
+            amount,
+            recipients,
+            &results_url,
+            &results_hash,
+        )?,
+    ], Some(&config.fee_payer.pubkey()));
+
+    let (recent_blockhash, fee_calculator) = config.rpc_client.get_recent_blockhash()?;
+    check_fee_payer_balance(
+        config,
+        fee_calculator.calculate_fee(&transaction.message()),
+    )?;
+    let mut signers = vec![
+        config.fee_payer.as_ref(),
+        config.owner.as_ref(),
+    ];
     unique_signers!(signers);
     transaction.sign(&signers, recent_blockhash);
     Ok(Some(transaction))
@@ -611,7 +671,7 @@ fn main() {
                     .validator(is_url)
                     .value_name("URL")
                     .takes_value(true)
-                    .help("Job manifestr URL [default: empty string]"),
+                    .help("Job manifest URL [default: empty string]"),
             )
             .arg(
                 Arg::with_name("manifest_hash")
@@ -619,7 +679,52 @@ fn main() {
                     .validator(is_hex)
                     .value_name("HEX")
                     .takes_value(true)
-                    .help("20-byte SHA1 hash in hex format [default: 0-byte hash]"),
+                    .help("20-byte manifest SHA1 hash in hex format [default: 0-byte hash]"),
+            )
+        )
+        .subcommand(SubCommand::with_name("store-results").about("Stores results in the escrow")
+            .arg(
+                Arg::with_name("escrow")
+                    .validator(is_pubkey)
+                    .index(1)
+                    .value_name("ESCROW_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Escrow address"),
+            )
+            .arg(
+                Arg::with_name("amount")
+                    .long("amount")
+                    .validator(is_amount)
+                    .value_name("AMOUNT")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Total amount to be sent out from the escrow."),
+            )
+            .arg(
+                Arg::with_name("recipients")
+                    .long("recipients")
+                    .validator(is_parsable::<u64>)
+                    .value_name("COUNT")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Number of recipients to receive tokens from the escrow."),
+            )
+            .arg(
+                Arg::with_name("results_url")
+                    .long("results-url")
+                    .validator(is_url)
+                    .value_name("URL")
+                    .takes_value(true)
+                    .help("Final results URL [default: empty string]"),
+            )
+            .arg(
+                Arg::with_name("results_hash")
+                    .long("results-hash")
+                    .validator(is_hex)
+                    .value_name("HEX")
+                    .takes_value(true)
+                    .help("20-byte results SHA1 hash in hex format [default: 0-byte hash]"),
             )
         )
         .get_matches();
@@ -713,6 +818,22 @@ fn main() {
                 recording_oracle_stake,
                 &manifest_url,
                 &manifest_hash,
+            )
+        }
+        ("store-results", Some(arg_matches)) => {
+            let escrow: Pubkey = pubkey_of(arg_matches, "escrow").unwrap();
+            let amount = value_t_or_exit!(arg_matches, "amount", f64);
+            let recipients = value_t_or_exit!(arg_matches, "recipients", u64);
+            let results_url: String =
+                value_of(arg_matches, "results_url").unwrap_or(String::new());
+            let results_hash: Option<String> = value_of(arg_matches, "results_hash");
+            command_store_results(
+                &config,
+                &escrow,
+                amount,
+                recipients,
+                &results_url,
+                &results_hash,
             )
         }
         _ => unreachable!(),
