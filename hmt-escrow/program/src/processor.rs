@@ -166,7 +166,9 @@ impl Processor {
             Self::find_authority_bump_seed(program_id, escrow_info.key);
 
         // Token account should be owned by the contract authority
-        let token_account = Box::new(TokenAccount::unpack_unchecked(&token_account_info.data.borrow())?);
+        let token_account = Box::new(TokenAccount::unpack_unchecked(
+            &token_account_info.data.borrow(),
+        )?);
         if token_account.owner != authority_key {
             return Err(EscrowError::TokenAccountAuthority.into());
         }
@@ -175,8 +177,9 @@ impl Processor {
         if token_account.mint != *token_mint_info.key {
             return Err(EscrowError::WrongTokenMint.into());
         }
-        let canceler_token_account =
-            Box::new(TokenAccount::unpack_unchecked(&canceler_token_account_info.data.borrow())?);
+        let canceler_token_account = Box::new(TokenAccount::unpack_unchecked(
+            &canceler_token_account_info.data.borrow(),
+        )?);
         if canceler_token_account.mint != *token_mint_info.key {
             return Err(EscrowError::WrongTokenMint.into());
         }

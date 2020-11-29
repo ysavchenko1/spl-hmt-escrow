@@ -9,7 +9,7 @@ use solana_program::{
     program_pack::{IsInitialized, Pack, Sealed},
     pubkey::Pubkey,
 };
-use std::{mem, str::FromStr, fmt};
+use std::{fmt, mem, str::FromStr};
 
 /// Size for the URL field
 pub const URL_LEN: usize = 256;
@@ -56,6 +56,15 @@ impl DataHash {
     pub const fn new_from_array(data: [u8; 20]) -> Self {
         Self(data)
     }
+    /// Create new from slice
+    pub fn new_from_slice(data: &[u8]) -> Result<Self, ProgramError> {
+        if data.len() != mem::size_of::<DataHash>() {
+            return Err(ProgramError::InvalidInstructionData);
+        }
+        let mut hash: Self = Default::default();
+        hash.0.copy_from_slice(data);
+        Ok(hash)
+    }
 }
 
 /// Stores data URL
@@ -70,14 +79,14 @@ impl Default for DataUrl {
 }
 
 impl fmt::Debug for DataUrl {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { 
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0[..].fmt(f)
     }
 }
 
 impl PartialEq for DataUrl {
-    fn eq(&self, other: &Self) -> bool { 
-        self.0.iter().zip(other.0.iter()).all(|(a,b)| a == b)
+    fn eq(&self, other: &Self) -> bool {
+        self.0.iter().zip(other.0.iter()).all(|(a, b)| a == b)
     }
 }
 
@@ -91,12 +100,14 @@ impl FromStr for DataUrl {
     type Err = ProgramError;
 
     fn from_str(s: &str) -> Result<Self, ProgramError> {
-        if s.as_bytes().len() > mem::size_of::<DataUrl>() {
+        let bytes = s.as_bytes();
+        let length = bytes.len();
+        if length > mem::size_of::<DataUrl>() {
             return Err(ProgramError::InvalidInstructionData);
         }
 
         let mut result: Self = Default::default();
-        result.0.copy_from_slice(s.as_bytes());
+        result.0[..length].copy_from_slice(bytes);
         Ok(result)
     }
 }
@@ -195,8 +206,8 @@ impl Pack for Escrow {
             final_results_url_dst,
             final_results_hash_dst,
         ) = mut_array_refs![
-            output, 8, 1, 32, 32, 36, 36, 1, 36, 36, 1, 32, 32, 32, 8, 8, 8, 8, 1, URL_LEN, 20, URL_LEN,
-            20
+            output, 8, 1, 32, 32, 36, 36, 1, 36, 36, 1, 32, 32, 32, 8, 8, 8, 8, 1, URL_LEN, 20,
+            URL_LEN, 20
         ];
         expires_dst.copy_from_slice(&self.expires.to_le_bytes());
         bump_seed_dst[0] = self.bump_seed;
@@ -256,8 +267,8 @@ impl Pack for Escrow {
             final_results_url_src,
             final_results_hash_src,
         ) = array_refs![
-            input, 8, 1, 32, 32, 36, 36, 1, 36, 36, 1, 32, 32, 32, 8, 8, 8, 8, 1, URL_LEN, 20, URL_LEN,
-            20
+            input, 8, 1, 32, 32, 36, 36, 1, 36, 36, 1, 32, 32, 32, 8, 8, 8, 8, 1, URL_LEN, 20,
+            URL_LEN, 20
         ];
         Ok(Escrow {
             expires: UnixTimestamp::from_le_bytes(*expires_src),

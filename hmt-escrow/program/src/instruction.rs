@@ -267,10 +267,7 @@ impl EscrowInstruction {
             let (bytes, rest) = input.split_at(URL_LEN);
             let mut bytes_copy = [0u8; URL_LEN];
             bytes_copy.copy_from_slice(bytes);
-            Ok((
-                DataUrl::new_from_array(bytes_copy),
-                rest,
-            ))
+            Ok((DataUrl::new_from_array(bytes_copy), rest))
         } else {
             Err(ProgramError::InvalidInstructionData)
         }
@@ -318,13 +315,13 @@ pub fn setup(
     recording_oracle: &Pubkey,
     recording_oracle_token_account: &Pubkey,
     recording_oracle_stake: u8,
-    manifest_url_str: &str,
+    manifest_url: &DataUrl,
     manifest_hash: &DataHash,
 ) -> Result<Instruction, ProgramError> {
     let data = EscrowInstruction::Setup {
         reputation_oracle_stake,
         recording_oracle_stake,
-        manifest_url: DataUrl::from_str(manifest_url_str)?,
+        manifest_url: *manifest_url,
         manifest_hash: *manifest_hash,
     }
     .pack();
