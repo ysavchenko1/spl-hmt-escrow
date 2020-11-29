@@ -6,8 +6,11 @@ use clap::{
 use hmt_escrow::state::DataHash;
 use hmt_escrow::state::DataUrl;
 use hmt_escrow::{
-    self, instruction::initialize as initialize_escrow, instruction::payout,
-    instruction::setup as setup_escrow, instruction::store_results,
+    self, 
+    instruction::{
+        initialize as initialize_escrow, payout, setup as setup_escrow, store_results,
+        cancel as cancel_escrow, complete as complete_escrow,
+    },
     processor::Processor as EscrowProcessor, state::Escrow,
 };
 use solana_clap_utils::{
@@ -620,6 +623,56 @@ fn command_payout(config: &Config, escrow: &Pubkey, file_name: &str) -> CommandR
     }
 }
 
+fn command_cancel(config: &Config, escrow: &Pubkey) -> CommandResult {
+    let account_data = config.rpc_client.get_account_data(escrow)?;
+    let escrow_info: Escrow = Escrow::unpack_from_slice(account_data.as_slice())?;
+
+    let authority =
+        EscrowProcessor::authority_id(&hmt_escrow::id(), &escrow, escrow_info.bump_seed)?;
+
+    let mut transaction = Transaction::new_with_payer(
+        &[
+            cancel_escrow(
+                &hmt_escrow::id(),
+                &escrow,
+                &config.owner.pubkey(),
+                &escrow_info.token_account,
+                &authority,
+                &escrow_info.canceler_token_account,
+                &spl_token::id(),
+            )?,
+        ],
+        Some(&config.fee_payer.pubkey()),
+    );
+
+    let (recent_blockhash, fee_calculator) = config.rpc_client.get_recent_blockhash()?;
+    check_fee_payer_balance(config, fee_calculator.calculate_fee(&transaction.message()))?;
+    let mut signers = vec![config.fee_payer.as_ref(), config.owner.as_ref()];
+    unique_signers!(signers);
+    transaction.sign(&signers, recent_blockhash);
+    Ok(Some(transaction))
+}
+
+fn command_complete(config: &Config, escrow: &Pubkey) -> CommandResult {
+    let mut transaction = Transaction::new_with_payer(
+        &[
+            complete_escrow(
+                &hmt_escrow::id(),
+                &escrow,
+                &config.owner.pubkey(),
+            )?,
+        ],
+        Some(&config.fee_payer.pubkey()),
+    );
+
+    let (recent_blockhash, fee_calculator) = config.rpc_client.get_recent_blockhash()?;
+    check_fee_payer_balance(config, fee_calculator.calculate_fee(&transaction.message()))?;
+    let mut signers = vec![config.fee_payer.as_ref(), config.owner.as_ref()];
+    unique_signers!(signers);
+    transaction.sign(&signers, recent_blockhash);
+    Ok(Some(transaction))
+}
+
 /// Return an error if a hex cannot be parsed.
 pub fn is_hex<T>(string: T) -> Result<(), String>
 where
@@ -888,6 +941,28 @@ fn main() {
                     .help("CSV file with recipients and amounts, <address>,<amount> on each line"),
             )
         )
+        .subcommand(SubCommand::with_name("cancel").about("Cancels escrow, all remaining funds are returned to the canceler's token account")
+            .arg(
+                Arg::with_name("escrow")
+                    .validator(is_pubkey)
+                    .index(1)
+                    .value_name("ESCROW_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Escrow address"),
+            )
+        )
+        .subcommand(SubCommand::with_name("complete").about("Completes escrow")
+            .arg(
+                Arg::with_name("escrow")
+                    .validator(is_pubkey)
+                    .index(1)
+                    .value_name("ESCROW_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Escrow address"),
+            )
+        )
         .get_matches();
 
     let mut wallet_manager = None;
@@ -999,6 +1074,14 @@ fn main() {
             let escrow: Pubkey = pubkey_of(arg_matches, "escrow").unwrap();
             let file_name = value_t_or_exit!(arg_matches, "file_name", String);
             command_payout(&config, &escrow, &file_name)
+        }
+        ("cancel", Some(arg_matches)) => {
+            let escrow: Pubkey = pubkey_of(arg_matches, "escrow").unwrap();
+            command_cancel(&config, &escrow)
+        }
+        ("complete", Some(arg_matches)) => {
+            let escrow: Pubkey = pubkey_of(arg_matches, "escrow").unwrap();
+            command_complete(&config, &escrow)
         }
         _ => unreachable!(),
     }
