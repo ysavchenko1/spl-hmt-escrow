@@ -10,7 +10,6 @@ use solana_sdk::{
 use hmt_escrow::*;
 use solana_program::info;
 use bincode::deserialize;
-use hmt_escrow::error::EscrowError::EscrowExpired;
 use hmt_escrow::state::Escrow;
 
 fn program_test() -> ProgramTest {
@@ -252,7 +251,7 @@ impl EscrowAccount {
 }
 
 #[tokio::test]
-async fn test_stake_pool_initialize() {
+async fn test_hmt_escrow_initialize() {
     let (mut banks_client, payer, recent_blockhash) = program_test().start().await;
     let escrow_account = EscrowAccount::new();
     escrow_account

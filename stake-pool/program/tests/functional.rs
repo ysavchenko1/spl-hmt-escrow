@@ -351,6 +351,6 @@ async fn test_stake_pool_deposit() {
                 &stake_pool_accounts.withdraw_authority
             );
         }
-        _ => assert!(false),
+        _ =>
     }
 }
