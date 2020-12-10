@@ -6,11 +6,11 @@ use solana_sdk::{
     signature::{Keypair, Signer},
     transaction::Transaction,
 };
-// use ::*;
 use hmt_escrow::*;
 use solana_program::info;
 use bincode::deserialize;
 use hmt_escrow::state::Escrow;
+use solana_program::nonce::State;
 
 fn program_test() -> ProgramTest {
     let mut pc = ProgramTest::new(
@@ -98,33 +98,6 @@ async fn create_token_account(
     banks_client.process_transaction(transaction).await.unwrap();
 }
 
-async fn create_escrow_account(
-    banks_client: &mut BanksClient,
-    payer: &Keypair,
-    recent_blockhash: &Hash,
-    escrow_account: &Keypair,
-) {
-    let rent = banks_client.get_rent().await.unwrap();
-    let escrow_account_balance = rent.minimum_balance(hmt_escrow::state::Escrow::LEN);
-    let account_rent = rent.minimum_balance(spl_token::state::Account::LEN);
-    let mut total_rent_free_balances = account_rent + escrow_account_balance;
-
-    let mut transaction = Transaction::new_with_payer(
-        &[
-            system_instruction::create_account(
-                &payer.pubkey(),
-                &escrow_account.pubkey(),
-                total_rent_free_balances,
-                hmt_escrow::state::Escrow::LEN as u64,
-                &id(),
-            ),
-        ],
-        Some(&payer.pubkey()),
-    );
-    transaction.sign(&[payer, escrow_account], *recent_blockhash);
-    banks_client.process_transaction(transaction).await.unwrap();
-}
-
 async fn create_escrow(
     banks_client: &mut BanksClient,
     payer: &Keypair,
@@ -135,10 +108,19 @@ async fn create_escrow(
     canceler: &Pubkey,
     canceler_token: &Keypair,
     token_mint: &Pubkey,
+    duration: &u64,
 ) {
+    let rent = banks_client.get_rent().await.unwrap();
+    let account_rent = rent.minimum_balance(state::Escrow::LEN);
 
     let mut transaction = Transaction::new_with_payer(
-        &[
+        &[ system_instruction::create_account(
+            &payer.pubkey(),
+            &escrow_account.pubkey(),
+            account_rent,
+            hmt_escrow::state::Escrow::LEN as u64,
+            &id(),
+        ),
             instruction::initialize(
                 &id(),
                 &escrow_account.pubkey(),
@@ -147,23 +129,22 @@ async fn create_escrow(
                 &launcher,
                 &canceler,
                 &canceler_token.pubkey(),
-                10,
+                *duration,
             )
                 .unwrap(),
         ],
         Some(&payer.pubkey()),
     );
-    transaction.sign(&[payer], *recent_blockhash);
+    transaction.sign(&[payer, escrow_account], *recent_blockhash);
     banks_client.process_transaction(transaction).await.unwrap();
 }
 struct EscrowAccount {
     pub escrow: Keypair,
     pub token_mint: Keypair,
     pub escrow_token_account: Keypair,
-    pub launcher: Pubkey,
+    pub launcher: Keypair,
     pub canceler: Keypair,
     pub canceler_token_account: Keypair,
-    pub owner: Pubkey,
     pub duration: u64,
     pub withdraw_authority: Pubkey,
     pub bump_seed:  u8,
@@ -174,14 +155,15 @@ impl EscrowAccount {
         let escrow = Keypair::new();
         let token_mint = Keypair::new();
         let escrow_token_account = Keypair::new();
-        let launcher =  Pubkey::new_unique();
+        let launcher =  Keypair::new();
         let canceler = Keypair::new();
         let canceler_token_account = Keypair::new();
-        let owner = Pubkey::new_unique();
+
+        //find authority bumpseed
         let (withdraw_authority, bump_seed) = hmt_escrow::processor::Processor::find_authority_bump_seed(&id() ,
         &escrow.pubkey()
         );
-        //find authority bumpseed
+
         Self {
             escrow,
             token_mint,
@@ -189,14 +171,13 @@ impl EscrowAccount {
             launcher,
             canceler,
             canceler_token_account,
-            owner,
             duration: 10000 as u64,
             withdraw_authority,
             bump_seed
         }
     }
 
-    pub async fn initialize_stake_pool(
+    pub async fn initialize_escrow(
         &self,
         mut banks_client: &mut BanksClient,
         payer: &Keypair,
@@ -210,13 +191,8 @@ impl EscrowAccount {
             &self.withdraw_authority,
         )
         .await;
-        create_escrow_account(
-            &mut banks_client,
-            &payer,
-            &recent_blockhash,
-            &self.escrow,
-        )
-        .await;
+
+        //Creating token account for escrow
         create_token_account(
             &mut banks_client,
             &payer,
@@ -226,6 +202,8 @@ impl EscrowAccount {
             &self.withdraw_authority,
         )
         .await;
+
+        //Creating token account for canceler
         create_token_account(
             &mut banks_client,
             &payer,
@@ -244,7 +222,8 @@ impl EscrowAccount {
             &self.launcher,
             &self.canceler.pubkey(),
             &self.canceler_token_account,
-            &self.token_mint.pubkey()
+            &self.token_mint.pubkey(),
+            &self.duration
         )
         .await;
     }
@@ -255,7 +234,7 @@ async fn test_hmt_escrow_initialize() {
     let (mut banks_client, payer, recent_blockhash) = program_test().start().await;
     let escrow_account = EscrowAccount::new();
     escrow_account
-        .initialize_stake_pool(&mut banks_client, &payer, &recent_blockhash)
+        .initialize_escrow(&mut banks_client, &payer, &recent_blockhash)
         .await;
 
     let escrow = banks_client
@@ -267,8 +246,7 @@ async fn test_hmt_escrow_initialize() {
     assert_eq!(escrow.data.len(), hmt_escrow::state::Escrow::LEN);
 
     match state::Escrow::unpack_from_slice(escrow.data.as_slice()) {
-        Ok(unpacked_escrow) => {
-            let escrow: Escrow = unpacked_escrow;
+        Ok(escrow) => {
             assert_eq!(escrow.state, state::EscrowState::Launched);
             assert_eq!(escrow.bump_seed, escrow_account.bump_seed);
             assert_eq!(escrow.token_mint, escrow_account.token_mint.pubkey());
@@ -278,4 +256,5 @@ async fn test_hmt_escrow_initialize() {
         }
         Err(_) =>  assert!(false),
     };
+
 }
