@@ -1,16 +1,12 @@
 #![cfg(feature = "test-bpf")]
 
+use hmt_escrow::*;
 use solana_program::{hash::Hash, program_pack::Pack, pubkey::Pubkey, system_instruction};
 use solana_program_test::*;
 use solana_sdk::{
     signature::{Keypair, Signer},
     transaction::Transaction,
 };
-use hmt_escrow::*;
-use solana_program::info;
-use bincode::deserialize;
-use hmt_escrow::state::Escrow;
-use solana_program::nonce::State;
 
 fn program_test() -> ProgramTest {
     let mut pc = ProgramTest::new(
@@ -63,7 +59,6 @@ async fn create_mint(
     banks_client.process_transaction(transaction).await.unwrap();
 }
 
-
 async fn create_token_account(
     banks_client: &mut BanksClient,
     payer: &Keypair,
@@ -90,7 +85,7 @@ async fn create_token_account(
                 token_mint,
                 owner,
             )
-                .unwrap(),
+            .unwrap(),
         ],
         Some(&payer.pubkey()),
     );
@@ -114,13 +109,14 @@ async fn create_escrow(
     let account_rent = rent.minimum_balance(state::Escrow::LEN);
 
     let mut transaction = Transaction::new_with_payer(
-        &[ system_instruction::create_account(
-            &payer.pubkey(),
-            &escrow_account.pubkey(),
-            account_rent,
-            hmt_escrow::state::Escrow::LEN as u64,
-            &id(),
-        ),
+        &[
+            system_instruction::create_account(
+                &payer.pubkey(),
+                &escrow_account.pubkey(),
+                account_rent,
+                hmt_escrow::state::Escrow::LEN as u64,
+                &id(),
+            ),
             instruction::initialize(
                 &id(),
                 &escrow_account.pubkey(),
@@ -131,7 +127,7 @@ async fn create_escrow(
                 &canceler_token.pubkey(),
                 *duration,
             )
-                .unwrap(),
+            .unwrap(),
         ],
         Some(&payer.pubkey()),
     );
@@ -147,7 +143,7 @@ struct EscrowAccount {
     pub canceler_token_account: Keypair,
     pub duration: u64,
     pub withdraw_authority: Pubkey,
-    pub bump_seed:  u8,
+    pub bump_seed: u8,
 }
 
 impl EscrowAccount {
@@ -155,14 +151,13 @@ impl EscrowAccount {
         let escrow = Keypair::new();
         let token_mint = Keypair::new();
         let escrow_token_account = Keypair::new();
-        let launcher =  Keypair::new();
+        let launcher = Keypair::new();
         let canceler = Keypair::new();
         let canceler_token_account = Keypair::new();
 
         //find authority bumpseed
-        let (withdraw_authority, bump_seed) = hmt_escrow::processor::Processor::find_authority_bump_seed(&id() ,
-        &escrow.pubkey()
-        );
+        let (withdraw_authority, bump_seed) =
+            hmt_escrow::processor::Processor::find_authority_bump_seed(&id(), &escrow.pubkey());
 
         Self {
             escrow,
@@ -173,7 +168,7 @@ impl EscrowAccount {
             canceler_token_account,
             duration: 10000 as u64,
             withdraw_authority,
-            bump_seed
+            bump_seed,
         }
     }
 
@@ -219,11 +214,11 @@ impl EscrowAccount {
             &recent_blockhash,
             &self.escrow,
             &self.escrow_token_account,
-            &self.launcher,
+            &self.launcher.pubkey(),
             &self.canceler.pubkey(),
             &self.canceler_token_account,
             &self.token_mint.pubkey(),
-            &self.duration
+            &self.duration,
         )
         .await;
     }
@@ -250,11 +245,16 @@ async fn test_hmt_escrow_initialize() {
             assert_eq!(escrow.state, state::EscrowState::Launched);
             assert_eq!(escrow.bump_seed, escrow_account.bump_seed);
             assert_eq!(escrow.token_mint, escrow_account.token_mint.pubkey());
-            assert_eq!(escrow.token_account, escrow_account.escrow_token_account.pubkey());
+            assert_eq!(
+                escrow.token_account,
+                escrow_account.escrow_token_account.pubkey()
+            );
             assert_eq!(escrow.canceler, escrow_account.canceler.pubkey());
-            assert_eq!(escrow.canceler_token_account, escrow_account.canceler_token_account.pubkey());
+            assert_eq!(
+                escrow.canceler_token_account,
+                escrow_account.canceler_token_account.pubkey()
+            );
         }
-        Err(_) =>  assert!(false),
+        Err(_) => assert!(false),
     };
-
 }
